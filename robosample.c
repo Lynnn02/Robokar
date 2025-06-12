@@ -45,7 +45,6 @@ void blinkLED(char times, int interval_ms);
 
 void CheckCollision(void *data)
 {
-    static int obstacle_recovery_state = 0;
     static int obstacle_timer = 0;
     
     for (;;)
@@ -53,50 +52,32 @@ void CheckCollision(void *data)
         char current_obstacle = (robo_proxSensor() == 1);
         
         // Detect new obstacle
-        if (current_obstacle && !myrobot.obstacle) {
-            // New obstacle detected
+        if (current_obstacle) {
+            // Obstacle detected - stop and honk
             myrobot.obstacle = 1;
-            obstacle_recovery_state = 0;
             obstacle_timer = 0;
             
             // Stop immediately and honk to signal obstacle detection
             robo_motorSpeed(STOP_SPEED, STOP_SPEED);
             robo_Honk();
         }
-        // Handle obstacle recovery
+        // Handle obstacle recovery - similar to case 0 (lost line)
         else if (myrobot.obstacle) {
-            if (!current_obstacle) {
-                // Obstacle is gone, but we're still in recovery mode
-                obstacle_timer++;
-                
-                switch (obstacle_recovery_state) {
-                    case 0: // Initial backup
-                        robo_motorSpeed(REVERSE_SPEED, REVERSE_SPEED);
-                        if (obstacle_timer > 10) { // Back up for 1 second
-                            obstacle_recovery_state = 1;
-                            obstacle_timer = 0;
-                        }
-                        break;
-                    case 1: // Turn to find line
-                        robo_motorSpeed(LOW_SPEED, -LOW_SPEED);
-                        if (obstacle_timer > 15) { // Turn for 1.5 seconds
-                            obstacle_recovery_state = 2;
-                            obstacle_timer = 0;
-                        }
-                        break;
-                    case 2: // Move forward slowly to find line
-                        robo_motorSpeed(LOW_SPEED, LOW_SPEED);
-                        if (robo_lineSensor() != 0 || obstacle_timer > 20) {
-                            // Line found or timeout
-                            myrobot.obstacle = 0; // End obstacle recovery
-                            obstacle_recovery_state = 0;
-                            obstacle_timer = 0;
-                        }
-                        break;
-                }
-            } else {
-                // Obstacle still present, stay stopped
+            // Obstacle is gone, start recovery
+            obstacle_timer++;
+            
+            if (obstacle_timer < 5) {
+                // First wait a moment to ensure obstacle is gone
                 robo_motorSpeed(STOP_SPEED, STOP_SPEED);
+            } else {
+                // Move forward slowly to find line
+                robo_motorSpeed(LOW_SPEED, LOW_SPEED);
+                
+                // If line found or timeout, end recovery
+                if (robo_lineSensor() != 0 || obstacle_timer > 30) {
+                    myrobot.obstacle = 0;
+                    obstacle_timer = 0;
+                }
             }
         } else {
             // No obstacle
@@ -222,49 +203,44 @@ void Navig(void *data)
                 break;
         }
         
-        // Light sensor detection - values between 0-100, >80 is very bright
+        // Light sensor detection - values between 0-100, >70 is bright
         if (lightVal > lightThreshold) {
-            // Light detected - turn on LED and honk
-            robo_LED_on();
-            robo_Honk();
-            myrobot.lightDetected = 1;
-            
-            // Determine which light sensor we're detecting based on checkpoint state
-            if (cp_state < CP_C && !seenL1) {
-                // Likely detecting L1 (before checkpoint C)
-                seenL1 = 1;
-                myrobot.score += 5; // Rule 4 - Reaching A without detecting L1 earns 5 points
+            // Only respond to new light detection
+            if (!myrobot.lightDetected) {
+                // Light newly detected - just honk once and continue movement
+                robo_Honk();
+                myrobot.lightDetected = 1;
                 
-                // Blink LED to acknowledge L1 detection
-                blinkLED(2, 100);
-            } else if (cp_state >= CP_C && !seenL2) {
-                // Likely detecting L2 (after checkpoint C)
-                seenL2 = 1;
-                
-                // Rule 7.1 - After detecting L2, reverse back to main track
-                if (cp_state == CP_D && !performedL2Task) {
-                    performedL2Task = 1;
+                // Determine which light sensor we're detecting based on checkpoint state
+                if (cp_state < CP_C && !seenL1) {
+                    // Detected L1 (before checkpoint C)
+                    seenL1 = 1;
+                    myrobot.score += 5; // Rule 4 - Reaching A without detecting L1 earns 5 points
+                } else if (cp_state >= CP_C && !seenL2) {
+                    // Detected L2 (after checkpoint C)
+                    seenL2 = 1;
                     
-                    // Signal L2 detection with double honk
-                    robo_Honk();
-                    OSTimeDlyHMSM(0, 0, 0, 200);
-                    robo_Honk();
-                    
-                    // Reverse and turn to get back to main track
-                    myrobot.lspeed = REVERSE_SPEED;
-                    myrobot.rspeed = REVERSE_SPEED;
-                    robo_motorSpeed(myrobot.lspeed, myrobot.rspeed);
-                    OSTimeDlyHMSM(0, 0, 1, 0); // Reverse for 1 second
-                    
-                    // Turn to reorient to main track
-                    myrobot.lspeed = MEDIUM_SPEED;
-                    myrobot.rspeed = -LOW_SPEED;
-                    robo_motorSpeed(myrobot.lspeed, myrobot.rspeed);
-                    OSTimeDlyHMSM(0, 0, 1, 500); // Turn for 1.5 seconds
-                    
-                    myrobot.score += 15; // Additional 15 points for completing L2 task
+                    // Rule 7.1 - After detecting L2, reverse back to main track
+                    if (cp_state == CP_D && !performedL2Task) {
+                        performedL2Task = 1;
+                        myrobot.score += 15; // Additional 15 points for completing L2 task
+                        
+                        // Reverse and turn to get back to main track
+                        myrobot.lspeed = REVERSE_SPEED;
+                        myrobot.rspeed = REVERSE_SPEED;
+                        robo_motorSpeed(myrobot.lspeed, myrobot.rspeed);
+                        OSTimeDlyHMSM(0, 0, 1, 0); // Reverse for 1 second
+                        
+                        // Turn to reorient to main track
+                        myrobot.lspeed = MEDIUM_SPEED;
+                        myrobot.rspeed = -LOW_SPEED;
+                        robo_motorSpeed(myrobot.lspeed, myrobot.rspeed);
+                        OSTimeDlyHMSM(0, 0, 1, 500); // Turn for 1.5 seconds
+                    }
                 }
             }
+            // Keep LED on while light is detected
+            robo_LED_on();
         } else {
             // No bright light detected
             if (myrobot.lightDetected) {

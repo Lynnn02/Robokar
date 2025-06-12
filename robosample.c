@@ -9,10 +9,10 @@
 #include "..\inc\hal_robo.h"
 
 #define STOP_SPEED     0
-#define LOW_SPEED     40
-#define MEDIUM_SPEED  60
-#define HIGH_SPEED    80
-#define REVERSE_SPEED -40
+#define LOW_SPEED     30
+#define MEDIUM_SPEED  50
+#define HIGH_SPEED    60
+#define REVERSE_SPEED -30
 
 #define TASK_STK_SZ            128
 #define TASK_START_PRIO          1
@@ -39,7 +39,7 @@ static CpState  cp_state = CP_START;
 static char     seenL1   = 0;
 static char     seenL2   = 0;
 static char     performedL2Task = 0;
-static int      lightThreshold = 60;  // Threshold for light sensor detection (>80% is very bright)
+static int      lightThreshold = 70;
 
 void blinkLED(char times, int interval_ms);
 

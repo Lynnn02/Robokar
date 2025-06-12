@@ -9,10 +9,11 @@
 #include "..\inc\hal_robo.h"
 
 #define STOP_SPEED     0
+#define VERY_LOW_SPEED 20
 #define LOW_SPEED     30
-#define MEDIUM_SPEED  50
-#define HIGH_SPEED    60
-#define REVERSE_SPEED -30
+#define MEDIUM_SPEED  45
+#define HIGH_SPEED    55
+#define REVERSE_SPEED -25
 
 #define TASK_STK_SZ            128
 #define TASK_START_PRIO          1
@@ -71,10 +72,10 @@ void CheckCollision(void *data)
                 robo_motorSpeed(STOP_SPEED, STOP_SPEED);
             } else {
                 // Move forward slowly to find line
-                robo_motorSpeed(LOW_SPEED, LOW_SPEED);
+                robo_motorSpeed(VERY_LOW_SPEED, VERY_LOW_SPEED);
                 
                 // If line found or timeout, end recovery
-                if (robo_lineSensor() != 0 || obstacle_timer > 30) {
+                if (robo_lineSensor() != 0 || obstacle_timer > 40) {
                     myrobot.obstacle = 0;
                     obstacle_timer = 0;
                 }
@@ -127,8 +128,8 @@ void Navig(void *data)
                 
                 if (lost_counter < 5) {
                     // First try backing up slightly
-                    myrobot.lspeed = REVERSE_SPEED;
-                    myrobot.rspeed = REVERSE_SPEED;
+                    myrobot.lspeed = REVERSE_SPEED * 0.8;
+                    myrobot.rspeed = REVERSE_SPEED * 0.8;
                 } else if (lost_counter < 15) {
                     // Then try turning in the direction we last saw the line
                     if (last_valid_code == 1 || last_valid_code == 3) {
@@ -161,7 +162,7 @@ void Navig(void *data)
             case 1: // Right sensor on track
                 // Gentle correction when only right sensor detects the line
                 myrobot.lspeed = MEDIUM_SPEED;
-                myrobot.rspeed = MEDIUM_SPEED * 0.7;
+                myrobot.rspeed = MEDIUM_SPEED * 0.75;
                 break;
             case 2: // Middle sensor on track - straight line
                 // Equal speeds for smooth straight movement
@@ -171,30 +172,33 @@ void Navig(void *data)
             case 3: // Middle and right sensors on track
                 // Gentle right turn
                 myrobot.lspeed = MEDIUM_SPEED;
-                myrobot.rspeed = MEDIUM_SPEED * 0.8;
+                myrobot.rspeed = MEDIUM_SPEED * 0.85;
                 break;
             case 4: // Left sensor on track
                 // Gentle correction when only left sensor detects the line
-                myrobot.lspeed = MEDIUM_SPEED * 0.7;
+                myrobot.lspeed = MEDIUM_SPEED * 0.75;
                 myrobot.rspeed = MEDIUM_SPEED;
                 break;
             case 6: // Left and middle sensors on track
                 // Gentle left turn
-                myrobot.lspeed = MEDIUM_SPEED * 0.8;
+                myrobot.lspeed = MEDIUM_SPEED * 0.85;
                 myrobot.rspeed = MEDIUM_SPEED;
                 break;
             case 7: // All sensors on track - full bar
                 // Detected full bar: pause briefly then continue
                 myrobot.lspeed = STOP_SPEED;
                 myrobot.rspeed = STOP_SPEED;
-                OSTimeDlyHMSM(0, 0, 0, 200); // Pause at the bar
+                OSTimeDlyHMSM(0, 0, 0, 150); // Shorter pause at the bar
+                myrobot.lspeed = LOW_SPEED;
+                myrobot.rspeed = LOW_SPEED;
+                OSTimeDlyHMSM(0, 0, 0, 100); // Gradual acceleration
                 myrobot.lspeed = MEDIUM_SPEED;
                 myrobot.rspeed = MEDIUM_SPEED;
                 break;
             case 5: // Left and right sensors on track (unusual case)
                 // Both outer sensors - go straight but slower
-                myrobot.lspeed = LOW_SPEED;
-                myrobot.rspeed = LOW_SPEED;
+                myrobot.lspeed = VERY_LOW_SPEED;
+                myrobot.rspeed = VERY_LOW_SPEED;
                 break;
             default:
                 // Default to gentle forward movement

@@ -31,6 +31,7 @@ struct robostate
     int lspeed;
     char obstacle;
     int score;
+    int lightDetected;
 } myrobot;
 
 typedef enum { CP_START, CP_A, CP_B, CP_C, CP_D, CP_E, CP_F, CP_DONE } CpState;
@@ -38,15 +39,70 @@ static CpState  cp_state = CP_START;
 static char     seenL1   = 0;
 static char     seenL2   = 0;
 static char     performedL2Task = 0;
-static int      lightThreshold = 200;  // Threshold for light sensor detection
+static int      lightThreshold = 60;  // Threshold for light sensor detection (>80% is very bright)
 
 void blinkLED(char times, int interval_ms);
 
 void CheckCollision(void *data)
 {
+    static int obstacle_recovery_state = 0;
+    static int obstacle_timer = 0;
+    
     for (;;)
     {
-        myrobot.obstacle = (robo_proxSensor() == 1);
+        char current_obstacle = (robo_proxSensor() == 1);
+        
+        // Detect new obstacle
+        if (current_obstacle && !myrobot.obstacle) {
+            // New obstacle detected
+            myrobot.obstacle = 1;
+            obstacle_recovery_state = 0;
+            obstacle_timer = 0;
+            
+            // Stop immediately and honk to signal obstacle detection
+            robo_motorSpeed(STOP_SPEED, STOP_SPEED);
+            robo_Honk();
+        }
+        // Handle obstacle recovery
+        else if (myrobot.obstacle) {
+            if (!current_obstacle) {
+                // Obstacle is gone, but we're still in recovery mode
+                obstacle_timer++;
+                
+                switch (obstacle_recovery_state) {
+                    case 0: // Initial backup
+                        robo_motorSpeed(REVERSE_SPEED, REVERSE_SPEED);
+                        if (obstacle_timer > 10) { // Back up for 1 second
+                            obstacle_recovery_state = 1;
+                            obstacle_timer = 0;
+                        }
+                        break;
+                    case 1: // Turn to find line
+                        robo_motorSpeed(LOW_SPEED, -LOW_SPEED);
+                        if (obstacle_timer > 15) { // Turn for 1.5 seconds
+                            obstacle_recovery_state = 2;
+                            obstacle_timer = 0;
+                        }
+                        break;
+                    case 2: // Move forward slowly to find line
+                        robo_motorSpeed(LOW_SPEED, LOW_SPEED);
+                        if (robo_lineSensor() != 0 || obstacle_timer > 20) {
+                            // Line found or timeout
+                            myrobot.obstacle = 0; // End obstacle recovery
+                            obstacle_recovery_state = 0;
+                            obstacle_timer = 0;
+                        }
+                        break;
+                }
+            } else {
+                // Obstacle still present, stay stopped
+                robo_motorSpeed(STOP_SPEED, STOP_SPEED);
+            }
+        } else {
+            // No obstacle
+            myrobot.obstacle = 0;
+        }
+        
         OSTimeDlyHMSM(0, 0, 0, 100);
     }
 }
@@ -65,38 +121,85 @@ void CntrlMotors(void *data)
 
 void Navig(void *data)
 {
+    static int lost_counter = 0;
+    static int recovery_direction = 1; // 1 for right, -1 for left
+    static int last_valid_code = 2; // Default to middle sensor
+    
     for (;;)
     {
         int  code     = robo_lineSensor();
         int  lightVal = robo_lightSensor();
         char prox     = robo_proxSensor();
 
+        // Remember last valid line position when not lost
+        if (code != 0) {
+            last_valid_code = code;
+            lost_counter = 0;
+        }
+        
         // Line following logic
         switch (code)
         {
             case 0: // All sensors off track - lost
-                // Lost: reverse slightly, then continue
-                myrobot.lspeed = REVERSE_SPEED;
-                myrobot.rspeed = REVERSE_SPEED;
+                // Implement progressive recovery strategy
+                lost_counter++;
+                
+                if (lost_counter < 5) {
+                    // First try backing up slightly
+                    myrobot.lspeed = REVERSE_SPEED;
+                    myrobot.rspeed = REVERSE_SPEED;
+                } else if (lost_counter < 15) {
+                    // Then try turning in the direction we last saw the line
+                    if (last_valid_code == 1 || last_valid_code == 3) {
+                        // Line was on the right, turn right
+                        myrobot.lspeed = LOW_SPEED;
+                        myrobot.rspeed = -LOW_SPEED;
+                    } else if (last_valid_code == 4 || last_valid_code == 6) {
+                        // Line was on the left, turn left
+                        myrobot.lspeed = -LOW_SPEED;
+                        myrobot.rspeed = LOW_SPEED;
+                    } else {
+                        // Try alternating directions in a widening spiral
+                        myrobot.lspeed = recovery_direction * MEDIUM_SPEED;
+                        myrobot.rspeed = -recovery_direction * MEDIUM_SPEED;
+                        
+                        if (lost_counter % 5 == 0) {
+                            recovery_direction = -recovery_direction; // Switch direction
+                        }
+                    }
+                } else {
+                    // If still lost after extended time, move forward a bit and try again
+                    myrobot.lspeed = LOW_SPEED;
+                    myrobot.rspeed = LOW_SPEED;
+                    
+                    if (lost_counter > 25) {
+                        lost_counter = 0; // Reset counter to start recovery again
+                    }
+                }
                 break;
             case 1: // Right sensor on track
+                // Gentle correction when only right sensor detects the line
                 myrobot.lspeed = MEDIUM_SPEED;
-                myrobot.rspeed = LOW_SPEED/2;
+                myrobot.rspeed = MEDIUM_SPEED * 0.7;
                 break;
-            case 2: // Middle sensor on track
+            case 2: // Middle sensor on track - straight line
+                // Equal speeds for smooth straight movement
                 myrobot.lspeed = MEDIUM_SPEED;
                 myrobot.rspeed = MEDIUM_SPEED;
                 break;
             case 3: // Middle and right sensors on track
+                // Gentle right turn
                 myrobot.lspeed = MEDIUM_SPEED;
-                myrobot.rspeed = LOW_SPEED;
+                myrobot.rspeed = MEDIUM_SPEED * 0.8;
                 break;
             case 4: // Left sensor on track
-                myrobot.lspeed = LOW_SPEED/2;
+                // Gentle correction when only left sensor detects the line
+                myrobot.lspeed = MEDIUM_SPEED * 0.7;
                 myrobot.rspeed = MEDIUM_SPEED;
                 break;
             case 6: // Left and middle sensors on track
-                myrobot.lspeed = LOW_SPEED;
+                // Gentle left turn
+                myrobot.lspeed = MEDIUM_SPEED * 0.8;
                 myrobot.rspeed = MEDIUM_SPEED;
                 break;
             case 7: // All sensors on track - full bar
@@ -107,28 +210,45 @@ void Navig(void *data)
                 myrobot.lspeed = MEDIUM_SPEED;
                 myrobot.rspeed = MEDIUM_SPEED;
                 break;
+            case 5: // Left and right sensors on track (unusual case)
+                // Both outer sensors - go straight but slower
+                myrobot.lspeed = LOW_SPEED;
+                myrobot.rspeed = LOW_SPEED;
+                break;
             default:
+                // Default to gentle forward movement
                 myrobot.lspeed = LOW_SPEED;
                 myrobot.rspeed = LOW_SPEED;
                 break;
         }
         
-        // Light sensor detection
+        // Light sensor detection - values between 0-100, >80 is very bright
         if (lightVal > lightThreshold) {
+            // Light detected - turn on LED and honk
+            robo_LED_on();
+            robo_Honk();
+            myrobot.lightDetected = 1;
+            
             // Determine which light sensor we're detecting based on checkpoint state
             if (cp_state < CP_C && !seenL1) {
                 // Likely detecting L1 (before checkpoint C)
                 seenL1 = 1;
                 myrobot.score += 5; // Rule 4 - Reaching A without detecting L1 earns 5 points
-                robo_Honk(); // Signal detection
+                
+                // Blink LED to acknowledge L1 detection
+                blinkLED(2, 100);
             } else if (cp_state >= CP_C && !seenL2) {
                 // Likely detecting L2 (after checkpoint C)
                 seenL2 = 1;
-                robo_Honk(); // Signal detection
                 
                 // Rule 7.1 - After detecting L2, reverse back to main track
                 if (cp_state == CP_D && !performedL2Task) {
                     performedL2Task = 1;
+                    
+                    // Signal L2 detection with double honk
+                    robo_Honk();
+                    OSTimeDlyHMSM(0, 0, 0, 200);
+                    robo_Honk();
                     
                     // Reverse and turn to get back to main track
                     myrobot.lspeed = REVERSE_SPEED;
@@ -144,6 +264,13 @@ void Navig(void *data)
                     
                     myrobot.score += 15; // Additional 15 points for completing L2 task
                 }
+            }
+        } else {
+            // No bright light detected
+            if (myrobot.lightDetected) {
+                // Turn off LED if we were previously detecting light
+                robo_LED_off();
+                myrobot.lightDetected = 0;
             }
         }
         
@@ -213,12 +340,26 @@ void Navig(void *data)
                 break;
         }
 
-        // Apply motor speeds
+        // Apply motor speeds - only if not in obstacle recovery mode
+        // The CheckCollision task handles motor control during obstacle recovery
         if (myrobot.obstacle) {
-            // Stop if obstacle detected
-            robo_motorSpeed(STOP_SPEED, STOP_SPEED);
+            // Obstacle handling is done in CheckCollision task
+            // Don't override those motor commands here
         } else {
             robo_motorSpeed(myrobot.lspeed, myrobot.rspeed);
+            
+            // Add a small delay when performing recovery maneuvers
+            if (code == 0 && lost_counter > 0) {
+                OSTimeDlyHMSM(0, 0, 0, 50); // Shorter delay during recovery
+            }
+            
+            // Add a small delay between sensor readings to reduce jitter
+            if (code == 2) {
+                // On straight line, no additional delay needed
+            } else if (code == 3 || code == 6) {
+                // Small delay for gentle turns
+                OSTimeDlyHMSM(0, 0, 0, 20);
+            }
         }
         
         OSTimeDlyHMSM(0, 0, 0, 100);
@@ -270,6 +411,7 @@ int main(void)
     myrobot.lspeed   = STOP_SPEED;
     myrobot.obstacle = 0;
     myrobot.score    = 0;
+    myrobot.lightDetected = 0;
 
     OSTaskCreate(TaskStart, (void*)0,
                 &TaskStartStk[TASK_STK_SZ-1],
